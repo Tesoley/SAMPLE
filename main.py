@@ -27,6 +27,7 @@ df = pd.DataFrame(
     ],
 )
 
+
 df = df.drop(columns=["ignore"])
 print(df)
 print(df.shape)
