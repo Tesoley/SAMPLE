@@ -17,3 +17,101 @@ df = df[['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume']].astype(float)
 df['Date'] = pd.to_datetime(df['timestamp'], unit='ms')
 df.set_index('Date', inplace=True)
 print(df)
+
+# 2 пункт: Moving Average Crossover
+short_ma = 20
+long_ma = 50
+
+# ковзне середнє розрах:
+df['Short_MA'] = df['Close'].rolling(window=short_ma).mean()
+df['Long_MA'] = df['Close'].rolling(window=long_ma).mean()
+# створення торгових сигналів
+df['Signal'] = 0
+df['Signal'] = np.where(df['Short_MA'] > df['Long_MA'], 1, 0) #1 is to buy, 0 to stay still. Where method can be used like IF
+df['Position'] = df['Signal'].diff() # after last activity calculate difference to understand weather we need to buy, sell or do nothing (1, -1, 0)
+#%%
+#-------–––––-------------PL------------------------------
+market_returns = [0.0]
+historic_based = [0.0]
+cumulated = [1.0] # initial capital
+
+# convert df to list to make it easier
+closes = list(df['Close'])
+signals = list(df['Signal'])
+
+for i in range(1, len(closes)): # start from the next day to get te previous where index 0
+    returns = (closes[i] - closes[i-1]) / closes[i-1] # (Ціна сьогодні - Ціна вчора )/ Ціна_вчора
+    market_returns.append(returns) #what we've basically calculated is the change in crypto price itself
+
+    # using historic data we look at the previous day we can calculate how much in % did we gain (since signal can be either 1 or 0), which mean that when we just wait, our revenue is 0, but then sell, we gain the price of the unit
+    unit_historical = returns * signals[i-1]
+    historic_based.append(unit_historical)
+
+    #накопичений результат за вчора на (1 + дохід за сьогодні)
+    cum_strat = cumulated[i-1] * (1 + unit_historical)
+    cumulated.append(cum_strat)
+
+# rewrite back to df
+df['market_returns'] = market_returns
+df['historic_based'] = historic_based
+df['cumulated'] = cumulated
+
+# print(df)
+#-------–––––------------PL-------------------------------
+#%%
+days_to_predict = 30
+prices = df['Close'].values
+n = len(prices)
+# fourier transform: look for hidden waves
+fft_vals = np.fft.fft(prices)
+fft_frequents = np.fft.fftfreq(n)
+
+# Для реалізації рядів був залучений Джеміні, задано питання про те, за якої логікою накладаються синусоїдні хвилі та які методи бібліотек в цьому допоможуть.
+
+# Залишаємо лише 15 найсильніших хвиль (щоб прибрати ринковий шум)
+top_harmonics = 15
+top_indices = np.argsort(np.abs(fft_vals))[::-1][:top_harmonics]
+
+# Створюємо масив часу: від минулого до майбутнього (500 + 30 днів)
+in_limit = np.arange(n)
+plus_prediction = np.arange(n + days_to_predict)
+forecast = np.zeros(len(plus_prediction), dtype=complex)
+
+for i in top_indices:
+    amplitude = fft_vals[i] / n
+    frequency = fft_frequents[i]
+    forecast += amplitude * np.exp(1j * 2 * np.pi * frequency * plus_prediction) #за формулою Ейлера 1j потрібна нам для того щоб np.exp перетворила функцію на синусоїду. в наступному рядку ми працюватимемо в полі дійсних чисел, тому комплексна зникне
+forecast = np.real(forecast)
+
+# Прогенеровуємо дати з останньої до тої, яку ми прогнозуємо. Був використаний Джеміні, щоб зрозуміти, які методи для цього потрібні.
+last_date = df.index[-1]
+future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=days_to_predict)
+
+plt.figure(figsize=(18, 7))
+
+# 1. Малюємо обов'язкову історію та ковзні середні
+plt.plot(df.index, df['Close'], label='Actual Price', color='black', alpha=0.5, linewidth=2)
+plt.plot(df.index, df['Short_MA'], label=f'Short MA ({short_ma})', color='blue', alpha=0.5, linewidth=2)
+plt.plot(df.index, df['Long_MA'], label=f'Long MA ({long_ma})', color='crimson', alpha=0.5, linewidth=2)
+
+# enter/exit points
+buy_signals =df[df['Position'] == 1]
+sell_signals =df[df['Position'] == -1]
+plt.plot(buy_signals.index, buy_signals['Short_MA'], 'o', markersize=12, color='limegreen', label='Buy (MA Signal)')
+plt.plot(sell_signals.index, sell_signals['Short_MA'], 'o', markersize=12, color='crimson', label='Sell (MA Signal)')
+
+# 3. Накладка історичних даних + прогноз рядами
+# Згладження
+plt.plot(df.index, forecast[:n], label='Fourier approximation', color='orange', linestyle='--', linewidth=2)
+# Прогноз
+plt.plot(future_dates, forecast[n:], label='Fourier prediction (for 30 days)', color='orange', linewidth=3)
+
+# Візуальний роздільник між історією та майбутнім
+plt.axvline(x=last_date, color='grey', linestyle=':', label='Today')
+
+plt.title(f"{symbol}: MA Crossover + Прогноз за Фур'є")
+plt.xlabel('Date')
+plt.ylabel('Price (USDT)')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
